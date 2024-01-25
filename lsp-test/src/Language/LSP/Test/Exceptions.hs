@@ -11,8 +11,7 @@ import Language.LSP.Protocol.Message
 
 -- | An exception that can be thrown during a 'Haskell.LSP.Test.Session.Session'
 data SessionException
-  = Timeout (Maybe FromServerMessage)
-  | NoContentLengthHeader
+  = NoContentLengthHeader
   | UnexpectedMessage String FromServerMessage
   | ReplayOutOfOrder FromServerMessage [FromServerMessage]
   | UnexpectedDiagnostics
@@ -26,11 +25,6 @@ data SessionException
 instance Exception SessionException
 
 instance Show SessionException where
-  show (Timeout lastMsg) =
-    "Timed out waiting to receive a message from the server."
-      ++ case lastMsg of
-        Just msg -> "\nLast message received:\n" ++ B.unpack (encodePretty msg)
-        Nothing -> mempty
   show NoContentLengthHeader = "Couldn't read Content-Length header from the server."
   show (UnexpectedMessage expected lastMsg) =
     "Received an unexpected message from the server:\n"

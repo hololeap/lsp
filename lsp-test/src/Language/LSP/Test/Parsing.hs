@@ -26,9 +26,7 @@ module Language.LSP.Test.Parsing (
 ) where
 
 import Control.Applicative
-import Control.Concurrent
 import Control.Monad
-import Control.Monad.IO.Class
 import Data.Conduit.Parser hiding (named)
 import Data.Conduit.Parser qualified (named)
 import Data.GADT.Compare
@@ -83,24 +81,7 @@ satisfyMaybe pred = satisfyMaybeM (pure . pred)
 
 satisfyMaybeM :: (FromServerMessage -> Session (Maybe a)) -> Session a
 satisfyMaybeM pred = do
-  skipTimeout <- overridingTimeout <$> get
-  timeoutId <- getCurTimeoutId
-  mtid <-
-    if skipTimeout
-      then pure Nothing
-      else
-        Just <$> do
-          chan <- asks messageChan
-          timeout <- asks (messageTimeout . config)
-          liftIO $ forkIO $ do
-            threadDelay (timeout * 1000000)
-            writeChan chan (TimeoutMessage timeoutId)
-
   x <- Session await
-
-  forM_ mtid $ \tid -> do
-    bumpTimeoutId timeoutId
-    liftIO $ killThread tid
 
   modify $ \s -> s{lastReceivedMessage = Just x}
 

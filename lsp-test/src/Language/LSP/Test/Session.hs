@@ -30,8 +30,6 @@ module Language.LSP.Test.Session
   , sendMessage
   , updateState
   , withTimeout
-  , getCurTimeoutId
-  , bumpTimeoutId
   , logMsg
   , LogMsgType(..)
   , documentChangeUri
@@ -85,7 +83,6 @@ import System.Process (ProcessHandle())
 import System.Process (waitForProcess)
 #endif
 import System.Timeout ( timeout )
-import Data.IORef
 import Colog.Core (LogAction (..), WithSeverity (..), Severity (..))
 import Data.Row
 import Data.String (fromString)
@@ -143,7 +140,6 @@ instance Default SessionConfig where
   def = defaultConfig
 
 data SessionMessage = ServerMessage FromServerMessage
-                    | TimeoutMessage Int
   deriving Show
 
 data SessionContext = SessionContext
@@ -152,7 +148,6 @@ data SessionContext = SessionContext
   , rootDir :: FilePath
   , messageChan :: Chan SessionMessage -- ^ Where all messages come through
   -- Keep curTimeoutId in SessionContext, as its tied to messageChan
-  , curTimeoutId :: IORef Int -- ^ The current timeout we are waiting on
   , requestMap :: MVar RequestMap
   , initRsp :: MVar (TResponseMessage Method_Initialize)
   , config :: SessionConfig
@@ -169,17 +164,6 @@ instance HasReader SessionContext Session where
 
 instance Monad m => HasReader r (ConduitM a b (StateT s (ReaderT r m))) where
   ask = lift $ lift Reader.ask
-
-getCurTimeoutId :: (HasReader SessionContext m, MonadIO m) => m Int
-getCurTimeoutId = asks curTimeoutId >>= liftIO . readIORef
-
--- Pass this the timeoutid you *were* waiting on
-bumpTimeoutId :: (HasReader SessionContext m, MonadIO m) => Int -> m ()
-bumpTimeoutId prev = do
-  v <- asks curTimeoutId
-  -- when updating the curtimeoutid, account for the fact that something else
-  -- might have bumped the timeoutid in the meantime
-  liftIO $ atomicModifyIORef' v (\x -> (max x (prev + 1), ()))
 
 data SessionState = SessionState
   {
@@ -246,11 +230,7 @@ runSessionMonad context state (Session session) = runReaderT (runStateT conduit 
       chanSource
 
     watchdog :: ConduitM SessionMessage FromServerMessage (StateT SessionState (ReaderT SessionContext IO)) ()
-    watchdog = Conduit.awaitForever $ \msg -> do
-      curId <- getCurTimeoutId
-      case msg of
-        ServerMessage sMsg -> yield sMsg
-        TimeoutMessage tId -> when (curId == tId) $ lastReceivedMessage <$> get >>= throw . Timeout
+    watchdog = Conduit.awaitForever $ \(ServerMessage sMsg) -> yield sMsg
 
 -- | An internal version of 'runSession' that allows for a custom handler to listen to the server.
 -- It also does not automatically send initialize and exit messages.
@@ -276,12 +256,11 @@ runSession' serverIn serverOut mServerProc serverHandler config caps rootDir exi
 
   reqMap <- newMVar newRequestMap
   messageChan <- newChan
-  timeoutIdVar <- newIORef 0
   initRsp <- newEmptyMVar
 
   mainThreadId <- myThreadId
 
-  let context = SessionContext serverIn absRootDir messageChan timeoutIdVar reqMap initRsp config caps
+  let context = SessionContext serverIn absRootDir messageChan reqMap initRsp config caps
       initState = SessionState 0 emptyVFS mempty False Nothing mempty (lspConfig config) mempty (ignoreLogNotifications config) (ignoreConfigurationRequests config)
       runSession' = runSessionMonad context initState
 
@@ -489,18 +468,7 @@ sendMessage msg = do
 -- after duration seconds. This will override the global timeout
 -- for waiting for messages to arrive defined in 'SessionConfig'.
 withTimeout :: Int -> Session a -> Session a
-withTimeout duration f = do
-  chan <- asks messageChan
-  timeoutId <- getCurTimeoutId
-  modify $ \s -> s { overridingTimeout = True }
-  tid <- liftIO $ forkIO $ do
-    threadDelay (duration * 1000000)
-    writeChan chan (TimeoutMessage timeoutId)
-  res <- f
-  liftIO $ killThread tid
-  bumpTimeoutId timeoutId
-  modify $ \s -> s { overridingTimeout = False }
-  return res
+withTimeout _ = id
 
 data LogMsgType = LogServer | LogClient
   deriving Eq

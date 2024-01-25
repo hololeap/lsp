@@ -47,17 +47,6 @@ main = hspec $ around withDummyServer $ do
       runSessionWithHandles hin hout def fullCaps "." $ return ()
 
     describe "withTimeout" $ do
-      it "times out" $ \(hin, hout) ->
-        let sesh = runSessionWithHandles hin hout def fullCaps "." $ do
-              openDoc "test/data/renamePass/Desktop/simple.hs" "haskell"
-              -- won't receive a request - will timeout
-              -- incoming logging requests shouldn't increase the
-              -- timeout
-              withTimeout 5 $ skipManyTill anyMessage (message SMethod_WorkspaceApplyEdit)
-         in -- wait just a bit longer than 5 seconds so we have time
-            -- to open the document
-            timeout 6000000 sesh `shouldThrow` anySessionException
-
       it "doesn't time out" $ \(hin, hout) ->
         let sesh = runSessionWithHandles hin hout def fullCaps "." $ do
               openDoc "test/data/renamePass/Desktop/simple.hs" "haskell"
@@ -85,26 +74,7 @@ main = hspec $ around withDummyServer $ do
                 return True
          in sesh `shouldReturn` True
 
-      it "unoverrides global message timeout" $ \(hin, hout) ->
-        let sesh =
-              runSessionWithHandles hin hout (def{messageTimeout = 5}) fullCaps "." $ do
-                doc <- openDoc "test/data/renamePass/Desktop/simple.hs" "haskell"
-                -- shouldn't time out in here since we are overriding it
-                withTimeout 10 $ liftIO $ threadDelay 7000000
-                getDocumentSymbols doc
-                -- should now timeout
-                skipManyTill anyMessage (message SMethod_WorkspaceApplyEdit)
-            isTimeout (Timeout _) = True
-            isTimeout _ = False
-         in sesh `shouldThrow` isTimeout
-
     describe "SessionException" $ do
-      it "throw on time out" $ \(hin, hout) ->
-        let sesh = runSessionWithHandles hin hout (def{messageTimeout = 10}) fullCaps "." $ do
-              _ <- message SMethod_WorkspaceApplyEdit
-              return ()
-         in sesh `shouldThrow` anySessionException
-
       it "don't throw when no time out" $ \(hin, hout) ->
         runSessionWithHandles hin hout (def{messageTimeout = 5}) fullCaps "." $ do
           liftIO $ threadDelay $ 6 * 1000000
